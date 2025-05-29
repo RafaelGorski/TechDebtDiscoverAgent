@@ -4,6 +4,10 @@ import { z } from "zod";
 import * as fs from "fs";
 import * as path from "path";
 
+/**
+ * Technical Debt Discovery MCP Server
+ * Scans project source code for common technical debt patterns
+ */
 const server = new McpServer({
   name: "techdebt-discover-agent",
   version: "1.0.0",
@@ -13,79 +17,264 @@ const server = new McpServer({
   },
 });
 
-// Helper: Recursively collect all .js/.ts files in a directory
-function getAllSourceFiles(dir: string, exts: string[] = [".js", ".ts"]): string[] {
-  let results: string[] = [];
-  const list = fs.readdirSync(dir);
-  list.forEach((file) => {
-    const filePath = path.join(dir, file);
-    const stat = fs.statSync(filePath);
-    if (stat && stat.isDirectory()) {
-      results = results.concat(getAllSourceFiles(filePath, exts));
-    } else if (exts.includes(path.extname(file))) {
-      results.push(filePath);
+// Configuration constants
+const DEFAULT_EXTENSIONS = [".js", ".ts", ".jsx", ".tsx"];
+const LARGE_FILE_THRESHOLD = {
+  characters: 2000,
+  lines: 100,
+};
+
+// Technical debt patterns to detect
+const DEBT_PATTERNS = {
+  comments: /TODO|FIXME|HACK|XXX|BUG/i,
+  anyType: /:\s*any\b|as\s+any\b/,
+  consoleLog: /console\.(log|debug|info|warn|error)/,
+  varDeclaration: /var\s+/,
+  deprecatedAPIs: /@deprecated|\.deprecated/i,
+  complexConditions: /if\s*\([^)]{50,}\)/,
+} as const;
+
+/**
+ * Recursively collects all source files in a directory
+ * @param dir Directory to scan
+ * @param exts File extensions to include
+ * @returns Array of file paths
+ */
+function getAllSourceFiles(dir: string, exts: string[] = DEFAULT_EXTENSIONS): string[] {
+  const results: string[] = [];
+  
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      
+      if (entry.isDirectory() && !shouldSkipDirectory(entry.name)) {
+        results.push(...getAllSourceFiles(fullPath, exts));
+      } else if (entry.isFile() && exts.includes(path.extname(entry.name))) {
+        results.push(fullPath);
+      }
     }
-  });
+  } catch (error) {
+    console.error(`Error reading directory ${dir}:`, error);
+  }
+  
   return results;
 }
 
-// Simple heuristics for technical debt
-function analyzeFileForTechDebt(filePath: string): string[] {
-  const content = fs.readFileSync(filePath, "utf8");
-  const findings: string[] = [];
-  if (/TODO|FIXME|HACK|XXX/.test(content)) {
-    findings.push("Contains TODO/FIXME/HACK/XXX comments");
+/**
+ * Determines if a directory should be skipped during scanning
+ * @param dirName Directory name to check
+ * @returns True if directory should be skipped
+ */
+function shouldSkipDirectory(dirName: string): boolean {
+  const skipDirs = ['node_modules', '.git', 'dist', 'build', 'coverage', '.next'];
+  return skipDirs.includes(dirName) || dirName.startsWith('.');
+}
+
+/**
+ * Technical debt finding interface
+ */
+interface TechDebtFinding {
+  type: string;
+  description: string;
+  severity: 'low' | 'medium' | 'high';
+  lineNumber?: number;
+}
+
+/**
+ * Analyzes a file for common technical debt patterns
+ * @param filePath Path to the file to analyze
+ * @returns Array of technical debt findings
+ */
+function analyzeFileForTechDebt(filePath: string): TechDebtFinding[] {
+  const findings: TechDebtFinding[] = [];
+  
+  try {
+    const content = fs.readFileSync(filePath, "utf8");
+    const lines = content.split('\n');
+    
+    // Check for comment-based debt
+    if (DEBT_PATTERNS.comments.test(content)) {
+      findings.push({
+        type: 'comments',
+        description: 'Contains TODO/FIXME/HACK/XXX comments',
+        severity: 'medium'
+      });
+    }
+    
+    // Check for TypeScript 'any' usage
+    if (DEBT_PATTERNS.anyType.test(content)) {
+      findings.push({
+        type: 'typing',
+        description: "Uses 'any' type (TypeScript anti-pattern)",
+        severity: 'high'
+      });
+    }
+    
+    // Check for console statements
+    if (DEBT_PATTERNS.consoleLog.test(content)) {
+      findings.push({
+        type: 'debugging',
+        description: 'Contains console.log statements',
+        severity: 'low'
+      });
+    }
+    
+    // Check for var declarations
+    if (DEBT_PATTERNS.varDeclaration.test(content)) {
+      findings.push({
+        type: 'modernization',
+        description: "Uses 'var' instead of 'let' or 'const'",
+        severity: 'medium'
+      });
+    }
+    
+    // Check for deprecated APIs
+    if (DEBT_PATTERNS.deprecatedAPIs.test(content)) {
+      findings.push({
+        type: 'deprecation',
+        description: 'Uses deprecated APIs or marked as deprecated',
+        severity: 'high'
+      });
+    }
+    
+    // Check for complex conditions
+    if (DEBT_PATTERNS.complexConditions.test(content)) {
+      findings.push({
+        type: 'complexity',
+        description: 'Contains complex conditional statements',
+        severity: 'medium'
+      });
+    }
+    
+    // Check file size
+    if (content.length > LARGE_FILE_THRESHOLD.characters && 
+        lines.length > LARGE_FILE_THRESHOLD.lines) {
+      findings.push({
+        type: 'size',
+        description: `Large file (${lines.length} lines): consider splitting into smaller modules`,
+        severity: 'medium'
+      });
+    }
+    
+  } catch (error) {
+    console.error(`Error analyzing file ${filePath}:`, error);
   }
-  if (/any\b/.test(content)) {
-    findings.push("Uses 'any' type (TypeScript anti-pattern)");
-  }
-  if (/console\.log/.test(content)) {
-    findings.push("Contains console.log statements");
-  }
-  if (/var\s+/.test(content)) {
-    findings.push("Uses 'var' instead of 'let' or 'const'");
-  }
-  if (content.length > 2000 && content.split("\n").length > 100) {
-    findings.push("Large file: consider splitting into smaller modules");
-  }
+  
   return findings;
 }
 
+/**
+ * Formats technical debt findings into a readable report
+ * @param findings Array of technical debt findings
+ * @param filePath Path to the file being reported
+ * @returns Formatted report string
+ */
+function formatFindings(findings: TechDebtFinding[], filePath: string): string {
+  const severityOrder = { high: 0, medium: 1, low: 2 };
+  const sortedFindings = findings.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+  
+  const header = `📁 **${path.relative(process.cwd(), filePath)}**`;
+  const findingsText = sortedFindings.map(finding => {
+    const icon = finding.severity === 'high' ? '🔴' : finding.severity === 'medium' ? '🟡' : '🔵';
+    return `  ${icon} [${finding.type}] ${finding.description}`;
+  }).join('\n');
+  
+  return `${header}\n${findingsText}`;
+}
+
+// Register the technical debt discovery tool
 server.tool(
   "list-tech-debt",
   "List possible technical debt areas in the project source code.",
   {
     directory: z.string().optional().describe("Project directory to scan. Defaults to current working directory."),
+    includeTypes: z.array(z.string()).optional().describe("Types of debt to include (comments, typing, debugging, etc.)"),
+    severity: z.enum(["low", "medium", "high"]).optional().describe("Minimum severity level to report"),
   },
-  async ({ directory }) => {
+  async ({ directory, includeTypes, severity }) => {
     const rootDir = directory || process.cwd();
-    let files;
+    const minSeverity = severity || "low";
+    const severityFilter = { low: 2, medium: 1, high: 0 };
+    
+    let files: string[];
     try {
       files = getAllSourceFiles(rootDir);
-    } catch (e: any) {
-      return { content: [{ type: "text", text: `Error reading directory: ${e.message}` }] };
+    } catch (error: any) {
+      return { 
+        content: [{ 
+          type: "text", 
+          text: `❌ Error reading directory: ${error.message}` 
+        }] 
+      };
     }
-    const report = [];
+    
+    if (files.length === 0) {
+      return { 
+        content: [{ 
+          type: "text", 
+          text: "📂 No source files found in the specified directory." 
+        }] 
+      };
+    }
+    
+    const reports: string[] = [];
+    let totalFindings = 0;
+    
     for (const file of files) {
       const findings = analyzeFileForTechDebt(file);
-      if (findings.length > 0) {
-        report.push(`File: ${file}\n- ${findings.join("\n- ")}`);
+      
+      // Filter by severity and type if specified
+      const filteredFindings = findings.filter(finding => {
+        const severityMatch = severityFilter[finding.severity] >= severityFilter[minSeverity];
+        const typeMatch = !includeTypes || includeTypes.includes(finding.type);
+        return severityMatch && typeMatch;
+      });
+      
+      if (filteredFindings.length > 0) {
+        reports.push(formatFindings(filteredFindings, file));
+        totalFindings += filteredFindings.length;
       }
     }
-    if (report.length === 0) {
-      return { content: [{ type: "text", text: "No obvious technical debt found in source files." }] };
+    
+    if (reports.length === 0) {
+      return { 
+        content: [{ 
+          type: "text", 
+          text: `✅ No technical debt found matching the specified criteria.\n\n📊 Scanned ${files.length} files.` 
+        }] 
+      };
     }
-    return { content: [{ type: "text", text: report.join("\n\n") }] };
+    
+    const summary = `🔍 **Technical Debt Report**\n📊 Found ${totalFindings} issues in ${reports.length} files (scanned ${files.length} total)\n\n`;
+    const fullReport = summary + reports.join('\n\n');
+    
+    return { 
+      content: [{ 
+        type: "text", 
+        text: fullReport 
+      }] 
+    };
   }
 );
 
-async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("Tech Debt Discover Agent MCP Server running on stdio");
+/**
+ * Main server initialization and startup
+ */
+async function main(): Promise<void> {
+  try {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error("🚀 Tech Debt Discover Agent MCP Server running on stdio");
+  } catch (error) {
+    console.error("❌ Failed to start MCP server:", error);
+    process.exit(1);
+  }
 }
 
+// Start the server with proper error handling
 main().catch((error) => {
-  console.error("Fatal error in main():", error);
+  console.error("💥 Fatal error in main():", error);
   process.exit(1);
 });
