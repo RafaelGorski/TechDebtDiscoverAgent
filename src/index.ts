@@ -13,8 +13,6 @@ const server = new McpServer({
   },
 });
 
-console.error("🚀 Initializing Tech Debt Discover Agent MCP Server...");
-
 // Helper: Recursively collect all .js/.ts files in a directory
 function getAllSourceFiles(dir: string, exts: string[] = [".js", ".ts"]): string[] {
   let results: string[] = [];
@@ -61,31 +59,19 @@ server.tool(
   },
   async ({ directory }) => {
     const rootDir = directory || process.cwd();
-    console.error(`🔍 Scanning directory: ${rootDir}`);
-    
     let files;
     try {
       files = getAllSourceFiles(rootDir);
-      console.error(`📁 Found ${files.length} source files to analyze`);
     } catch (e: any) {
-      console.error(`❌ Error reading directory: ${e.message}`);
       return { content: [{ type: "text", text: `Error reading directory: ${e.message}` }] };
     }
-    
     const report = [];
-    let totalIssues = 0;
-    
     for (const file of files) {
       const findings = analyzeFileForTechDebt(file);
       if (findings.length > 0) {
-        console.error(`⚠️  Found ${findings.length} issues in: ${file}`);
         report.push(`File: ${file}\n- ${findings.join("\n- ")}`);
-        totalIssues += findings.length;
       }
     }
-    
-    console.error(`📊 Scan complete: ${totalIssues} total issues found in ${files.length} files`);
-    
     if (report.length === 0) {
       return { content: [{ type: "text", text: "No obvious technical debt found in source files." }] };
     }
@@ -94,15 +80,9 @@ server.tool(
 );
 
 async function main() {
-  console.error("🔧 Setting up stdio transport...");
   const transport = new StdioServerTransport();
-  
-  console.error("🔗 Connecting MCP server...");
   await server.connect(transport);
-  
-  console.error("✅ Tech Debt Discover Agent MCP Server running on stdio");
-  console.error("🛠️  Available tools: list-tech-debt");
-  console.error("📋 Ready to scan for technical debt patterns!");
+  console.error("Tech Debt Discover Agent MCP Server running on stdio");
 }
 
 main().catch((error) => {
