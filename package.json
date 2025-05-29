@@ -1,0 +1,32 @@
+{
+  "name": "techdebtdiscoveragent",
+  "version": "1.0.0",
+  "description": "Model Context Protocol (MCP) server for technical debt discovery in source code projects",
+  "main": "build/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc",
+    "start": "node ./build/index.js"
+  },
+  "keywords": ["mcp", "technical-debt", "code-analysis", "typescript"],
+  "author": "",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_USERNAME/TechDebtDiscoverAgent.git"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.24",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.25.34"
+  },
+  "bin": {
+    "techdebt-discover-agent": "./build/index.js"
+  },
+  "files": [
+    "build"
+  ]
+}

@@ -1,0 +1,3 @@
+<!-- Use this file to provide workspace-specific custom instructions to Copilot. For more details, visit https://code.visualstudio.com/docs/copilot/copilot-customization#_use-a-githubcopilotinstructionsmd-file -->
+
+This is an MCP Server project for technical debt discovery. The server exposes a tool that scans project source code for common technical debt patterns (e.g., TODOs, use of 'any', console.log, large files, etc.) and reports possible areas for improvement. See https://modelcontextprotocol.io/llms-full.txt and the SDK at https://github.com/modelcontextprotocol/create-python-server for more info and examples.
