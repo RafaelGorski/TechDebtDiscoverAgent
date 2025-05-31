@@ -31,6 +31,9 @@ The server acts as a specialized technical debt analysis service that LLMs can l
   - Real-time debugging of server responses
   - Parameter validation and error testing
   - Essential for development workflow
+- **TypeSpec Compiler**: `npm run typespec:compile` - Generate types and schemas
+- **TypeSpec Watch Mode**: `npm run typespec:watch` - Auto-regenerate on changes
+- **API Documentation**: Auto-generated from TypeSpec specifications
 
 ## 🚀 Completed Features
 
@@ -138,16 +141,22 @@ const DEFAULT_EXTENSIONS = [".js", ".ts", ".jsx", ".tsx"];
 - `zod`: Schema validation
 - `fs`: File system operations
 - `path`: Path manipulation
+- **`@typespec/compiler`**: TypeSpec compiler for API specification
+- **`@typespec/json-schema`**: JSON Schema generation from TypeSpec
+- **`@typespec/openapi3`**: OpenAPI 3.0 generation from TypeSpec
 
-### Performance Characteristics
-- **Memory**: Processes files one at a time (streaming approach)
-- **I/O**: Synchronous file reading for simplicity
-- **Scalability**: Linear time complexity O(n) where n = number of files
+### Type Safety & API Design
+- **TypeSpec Integration**: API types and interfaces defined in TypeSpec
+- **Generated TypeScript Types**: Automatic type generation from TypeSpec specifications
+- **JSON Schema**: API validation schemas generated from TypeSpec
+- **OpenAPI 3.0**: Complete API documentation generated automatically
+- **Type-safe MCP Integration**: All MCP tool parameters and responses use generated types
 
-### Output Format
-- Markdown-formatted text with emoji indicators
-- Hierarchical structure: Summary → File → Findings
-- Severity-sorted findings within each file
+### API Specification
+- **TypeSpec Definition**: `specs/tech-debt-api.tsp` - Complete API specification
+- **Generated Types**: `src/types/generated.ts` - TypeScript interfaces and enums
+- **Schema Validation**: JSON Schema files for parameter validation
+- **Documentation**: Auto-generated OpenAPI documentation
 
 ## 🎯 Future Enhancement Opportunities
 

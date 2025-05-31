@@ -4,33 +4,33 @@ import { z } from "zod";
 import * as fs from "fs";
 import * as path from "path";
 
-/**
- * Result type for better error handling
- */
-type Result<T, E = Error> = 
-  | { success: true; data: T }
-  | { success: false; error: E };
+// Import TypeSpec-generated types
+import {
+  TechDebtFinding,
+  TechDebtError,
+  ErrorCategory,
+  Severity,
+  DebtType,
+  FileAnalysis,
+  AnalysisSummary,
+  TechDebtReport,
+  AnalysisConfiguration,
+  ListTechDebtParameters,
+  ListTechDebtResponse,
+  Result,
+  FileSystemResult
+} from "./types/generated.js";
 
 /**
- * Error categories for better error handling
+ * Custom error class with categorization (extends TypeSpec-generated interface)
  */
-enum ErrorCategory {
-  FileSystem = 'filesystem',
-  Permission = 'permission',
-  Validation = 'validation',
-  Analysis = 'analysis',
-  Configuration = 'configuration'
-}
-
-/**
- * Custom error class with categorization
- */
-class TechDebtError extends Error {
+class TechDebtErrorImpl extends Error implements TechDebtError {
   constructor(
     message: string,
     public category: ErrorCategory,
     public recoverable: boolean = true,
-    public context?: Record<string, any>
+    public context?: Record<string, unknown>,
+    public filePath?: string
   ) {
     super(message);
     this.name = 'TechDebtError';
@@ -50,21 +50,31 @@ const server = new McpServer({
   },
 });
 
-// Configuration constants
-const DEFAULT_EXTENSIONS = [".js", ".ts", ".jsx", ".tsx"];
-const LARGE_FILE_THRESHOLD = {
-  characters: 2000,
-  lines: 100,
+// Configuration constants based on TypeSpec
+const DEFAULT_CONFIGURATION: AnalysisConfiguration = {
+  directory: process.cwd(),
+  extensions: [".js", ".ts", ".jsx", ".tsx"],
+  minSeverity: Severity.Low,
+  skipDirectories: [
+    'node_modules', '.git', 'dist', 'build', 'coverage', 
+    '.nyc_output', '__coverage__', '.coverage', 'c8-coverage',
+    '.next', '.nuxt', '.vscode', '.idea'
+  ],
+  thresholds: {
+    maxFileSize: 2000,
+    maxLineCount: 100,
+    complexConditionLength: 50
+  }
 };
 
 // Technical debt patterns to detect
 const DEBT_PATTERNS = {
-  comments: /TODO|FIXME|HACK|XXX|BUG/i,
-  anyType: /:\s*any\b|as\s+any\b/,
-  consoleLog: /console\.(log|debug|info|warn|error)/,
-  varDeclaration: /var\s+/,
-  deprecatedAPIs: /@deprecated|\.deprecated/i,
-  complexConditions: /if\s*\([^)]{50,}\)/,
+  [DebtType.Comments]: /TODO|FIXME|HACK|XXX|BUG/i,
+  [DebtType.Typing]: /:\s*any\b|as\s+any\b/,
+  [DebtType.Debugging]: /console\.(log|debug|info|warn|error)/,
+  [DebtType.Modernization]: /var\s+/,
+  [DebtType.Deprecation]: /@deprecated|\.deprecated/i,
+  [DebtType.Complexity]: /if\s*\([^)]{50,}\)/,
 } as const;
 
 /**
@@ -81,11 +91,12 @@ function safeReadFile(filePath: string): Result<string> {
     
     return { 
       success: false, 
-      error: new TechDebtError(
+      error: new TechDebtErrorImpl(
         `Failed to read file: ${error instanceof Error ? error.message : 'Unknown error'}`,
         category,
         false,
-        { filePath, originalError: error }
+        { originalError: error },
+        filePath
       )
     };
   }
@@ -105,23 +116,28 @@ function safeReadDirectory(dir: string): Result<fs.Dirent[]> {
     
     return {
       success: false,
-      error: new TechDebtError(
+      error: new TechDebtErrorImpl(
         `Failed to read directory: ${error instanceof Error ? error.message : 'Unknown error'}`,
         category,
         true,
-        { directory: dir, originalError: error }
+        { originalError: error },
+        dir
       )
     };
   }
 }
 
 /**
- * Recursively collects all source files in a directory with error handling
- * @param dir Directory to scan
- * @param exts File extensions to include
- * @returns Result containing array of file paths or error
+ * Determines if a directory should be skipped during scanning
  */
-function getAllSourceFiles(dir: string, exts: string[] = DEFAULT_EXTENSIONS): Result<{ files: string[], errors: TechDebtError[] }> {
+function shouldSkipDirectory(dirName: string, skipDirs: string[]): boolean {
+  return skipDirs.includes(dirName) || dirName.startsWith('.');
+}
+
+/**
+ * Recursively collects all source files in a directory with error handling
+ */
+function getAllSourceFiles(config: AnalysisConfiguration): Result<FileSystemResult> {
   const results: string[] = [];
   const errors: TechDebtError[] = [];
   
@@ -129,7 +145,6 @@ function getAllSourceFiles(dir: string, exts: string[] = DEFAULT_EXTENSIONS): Re
     const dirResult = safeReadDirectory(currentDir);
     
     if (!dirResult.success) {
-      // Log recoverable errors but continue scanning
       if (dirResult.error.recoverable) {
         console.error(`⚠️ Skipping directory ${currentDir}: ${dirResult.error.message}`);
         errors.push(dirResult.error);
@@ -142,94 +157,58 @@ function getAllSourceFiles(dir: string, exts: string[] = DEFAULT_EXTENSIONS): Re
     for (const entry of dirResult.data) {
       const fullPath = path.join(currentDir, entry.name);
       
-      if (entry.isDirectory() && !shouldSkipDirectory(entry.name)) {
+      if (entry.isDirectory() && !shouldSkipDirectory(entry.name, config.skipDirectories)) {
         try {
           collectFiles(fullPath);
         } catch (error) {
-          if (error instanceof TechDebtError && error.recoverable) {
+          if (error instanceof TechDebtErrorImpl && error.recoverable) {
             console.error(`⚠️ Error in subdirectory ${fullPath}: ${error.message}`);
             errors.push(error);
           } else {
             throw error;
           }
         }
-      } else if (entry.isFile() && exts.includes(path.extname(entry.name))) {
+      } else if (entry.isFile() && config.extensions.includes(path.extname(entry.name))) {
         results.push(fullPath);
       }
     }
   }
   
   try {
-    collectFiles(dir);
-    
-    // Return success even if there were recoverable errors
+    collectFiles(config.directory);
     return { success: true, data: { files: results, errors } };
   } catch (error) {
     return {
       success: false,
-      error: error instanceof TechDebtError 
+      error: error instanceof TechDebtErrorImpl 
         ? error 
-        : new TechDebtError(
+        : new TechDebtErrorImpl(
             `Fatal error during file collection: ${error instanceof Error ? error.message : 'Unknown error'}`,
             ErrorCategory.FileSystem,
             false,
-            { directory: dir, originalError: error }
+            { originalError: error },
+            config.directory
           )
     };
   }
 }
 
 /**
- * Determines if a directory should be skipped during scanning
- * @param dirName Directory name to check
- * @returns True if directory should be skipped
- */
-function shouldSkipDirectory(dirName: string): boolean {
-  const skipDirs = [
-    'node_modules', 
-    '.git', 
-    'dist', 
-    'build', 
-    'coverage', 
-    '.nyc_output',
-    '__coverage__',
-    '.coverage',
-    'c8-coverage',
-    '.next',
-    '.nuxt',
-    '.vscode',
-    '.idea'
-  ];
-  return skipDirs.includes(dirName) || dirName.startsWith('.');
-}
-
-/**
- * Technical debt finding interface
- */
-interface TechDebtFinding {
-  type: string;
-  description: string;
-  severity: 'low' | 'medium' | 'high';
-  lineNumber?: number;
-}
-
-/**
  * Analyzes a file for common technical debt patterns with error handling
- * @param filePath Path to the file to analyze
- * @returns Result containing array of technical debt findings or error
  */
-function analyzeFileForTechDebt(filePath: string): Result<TechDebtFinding[]> {
+function analyzeFileForTechDebt(filePath: string, config: AnalysisConfiguration): Result<FileAnalysis> {
   const findings: TechDebtFinding[] = [];
   
   const fileResult = safeReadFile(filePath);
   if (!fileResult.success) {
     return {
       success: false,
-      error: new TechDebtError(
+      error: new TechDebtErrorImpl(
         `Cannot analyze file: ${fileResult.error.message}`,
         ErrorCategory.Analysis,
         true,
-        { filePath, originalError: fileResult.error }
+        { originalError: fileResult.error },
+        filePath
       )
     };
   }
@@ -237,179 +216,130 @@ function analyzeFileForTechDebt(filePath: string): Result<TechDebtFinding[]> {
   try {
     const content = fileResult.data;
     const lines = content.split('\n');
+    const stats = fs.statSync(filePath);
     
-    // Check for comment-based debt
-    if (DEBT_PATTERNS.comments.test(content)) {
-      findings.push({
-        type: 'comments',
-        description: 'Contains TODO/FIXME/HACK/XXX comments',
-        severity: 'medium'
-      });
-    }
+    // Check patterns based on include types
+    const typesToCheck = config.includeTypes || Object.values(DebtType);
     
-    // Check for TypeScript 'any' usage
-    if (DEBT_PATTERNS.anyType.test(content)) {
-      findings.push({
-        type: 'typing',
-        description: "Uses 'any' type (TypeScript anti-pattern)",
-        severity: 'high'
-      });
-    }
-    
-    // Check for console statements
-    if (DEBT_PATTERNS.consoleLog.test(content)) {
-      findings.push({
-        type: 'debugging',
-        description: 'Contains console.log statements',
-        severity: 'low'
-      });
-    }
-    
-    // Check for var declarations
-    if (DEBT_PATTERNS.varDeclaration.test(content)) {
-      findings.push({
-        type: 'modernization',
-        description: "Uses 'var' instead of 'let' or 'const'",
-        severity: 'medium'
-      });
-    }
-    
-    // Check for deprecated APIs
-    if (DEBT_PATTERNS.deprecatedAPIs.test(content)) {
-      findings.push({
-        type: 'deprecation',
-        description: 'Uses deprecated APIs or marked as deprecated',
-        severity: 'high'
-      });
-    }
-    
-    // Check for complex conditions
-    if (DEBT_PATTERNS.complexConditions.test(content)) {
-      findings.push({
-        type: 'complexity',
-        description: 'Contains complex conditional statements',
-        severity: 'medium'
-      });
+    for (const debtType of typesToCheck) {
+      const pattern = DEBT_PATTERNS[debtType];
+      if (pattern && pattern.test(content)) {
+        let severity: Severity;
+        let description: string;
+        
+        switch (debtType) {
+          case DebtType.Comments:
+            severity = Severity.Medium;
+            description = 'Contains TODO/FIXME/HACK/XXX comments';
+            break;
+          case DebtType.Typing:
+            severity = Severity.High;
+            description = "Uses 'any' type (TypeScript anti-pattern)";
+            break;
+          case DebtType.Debugging:
+            severity = Severity.Low;
+            description = 'Contains console.log statements';
+            break;
+          case DebtType.Modernization:
+            severity = Severity.Medium;
+            description = "Uses 'var' instead of 'let' or 'const'";
+            break;
+          case DebtType.Deprecation:
+            severity = Severity.High;
+            description = 'Uses deprecated APIs or marked as deprecated';
+            break;
+          case DebtType.Complexity:
+            severity = Severity.Medium;
+            description = 'Contains complex conditional statements';
+            break;
+          default:
+            continue;
+        }
+        
+        findings.push({
+          type: debtType,
+          description,
+          severity
+        });
+      }
     }
     
     // Check file size
-    if (content.length > LARGE_FILE_THRESHOLD.characters && 
-        lines.length > LARGE_FILE_THRESHOLD.lines) {
+    if (typesToCheck.includes(DebtType.Size) && 
+        (stats.size > config.thresholds.maxFileSize || lines.length > config.thresholds.maxLineCount)) {
       findings.push({
-        type: 'size',
+        type: DebtType.Size,
         description: `Large file (${lines.length} lines): consider splitting into smaller modules`,
-        severity: 'medium'
+        severity: Severity.Medium
       });
     }
     
-    return { success: true, data: findings };
+    return { 
+      success: true, 
+      data: {
+        filePath: path.relative(config.directory, filePath),
+        findings,
+        fileSize: stats.size,
+        lineCount: lines.length,
+        analyzedAt: new Date()
+      }
+    };
   } catch (error) {
     return {
       success: false,
-      error: new TechDebtError(
+      error: new TechDebtErrorImpl(
         `Error during analysis: ${error instanceof Error ? error.message : 'Unknown error'}`,
         ErrorCategory.Analysis,
         true,
-        { filePath, originalError: error }
+        { originalError: error },
+        filePath
       )
     };
   }
 }
 
 /**
- * Formats technical debt findings into a readable report
- * @param findings Array of technical debt findings
- * @param filePath Path to the file being reported
- * @returns Formatted report string
+ * Validates tool parameters using TypeSpec types
  */
-function formatFindings(findings: TechDebtFinding[], filePath: string): string {
-  const severityOrder = { high: 0, medium: 1, low: 2 };
-  const sortedFindings = findings.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
-  
-  const header = `📁 **${path.relative(process.cwd(), filePath)}**`;
-  const findingsText = sortedFindings.map(finding => {
-    const icon = finding.severity === 'high' ? '🔴' : finding.severity === 'medium' ? '🟡' : '🔵';
-    return `  ${icon} [${finding.type}] ${finding.description}`;
-  }).join('\n');
-  
-  return `${header}\n${findingsText}`;
-}
-
-/**
- * Validates tool parameters
- */
-function validateToolParameters(directory?: string, includeTypes?: string[], severity?: string): Result<{
-  rootDir: string;
-  minSeverity: string;
-  includeTypes?: string[];
-}> {
+function validateToolParameters(params: Partial<ListTechDebtParameters>): Result<AnalysisConfiguration> {
   try {
-    // Validate directory
-    const rootDir = directory || process.cwd();
-    if (!fs.existsSync(rootDir)) {
-      return {
-        success: false,
-        error: new TechDebtError(
-          `Directory does not exist: ${rootDir}`,
-          ErrorCategory.Validation,
-          false,
-          { directory: rootDir }
-        )
-      };
-    }
-
-    if (!fs.statSync(rootDir).isDirectory()) {
-      return {
-        success: false,
-        error: new TechDebtError(
-          `Path is not a directory: ${rootDir}`,
-          ErrorCategory.Validation,
-          false,
-          { directory: rootDir }
-        )
-      };
-    }
-
-    // Validate severity
-    const validSeverities = ['low', 'medium', 'high'];
-    const minSeverity = severity || 'low';
-    if (!validSeverities.includes(minSeverity)) {
-      return {
-        success: false,
-        error: new TechDebtError(
-          `Invalid severity level: ${minSeverity}. Must be one of: ${validSeverities.join(', ')}`,
-          ErrorCategory.Validation,
-          false,
-          { severity: minSeverity, validSeverities }
-        )
-      };
-    }
-
-    // Validate include types
-    if (includeTypes && includeTypes.length > 0) {
-      const validTypes = ['comments', 'typing', 'debugging', 'modernization', 'deprecation', 'complexity', 'size'];
-      const invalidTypes = includeTypes.filter(type => !validTypes.includes(type));
-      if (invalidTypes.length > 0) {
-        return {
-          success: false,
-          error: new TechDebtError(
-            `Invalid include types: ${invalidTypes.join(', ')}. Valid types: ${validTypes.join(', ')}`,
-            ErrorCategory.Validation,
-            false,
-            { invalidTypes, validTypes }
-          )
-        };
-      }
-    }
-
-    return {
-      success: true,
-      data: { rootDir, minSeverity, includeTypes }
+    const config: AnalysisConfiguration = {
+      ...DEFAULT_CONFIGURATION,
+      directory: params.directory || DEFAULT_CONFIGURATION.directory,
+      minSeverity: params.severity || DEFAULT_CONFIGURATION.minSeverity,
+      includeTypes: params.includeTypes
     };
+
+    // Validate directory
+    if (!fs.existsSync(config.directory)) {
+      return {
+        success: false,
+        error: new TechDebtErrorImpl(
+          `Directory does not exist: ${config.directory}`,
+          ErrorCategory.Validation,
+          false,
+          { directory: config.directory }
+        )
+      };
+    }
+
+    if (!fs.statSync(config.directory).isDirectory()) {
+      return {
+        success: false,
+        error: new TechDebtErrorImpl(
+          `Path is not a directory: ${config.directory}`,
+          ErrorCategory.Validation,
+          false,
+          { directory: config.directory }
+        )
+      };
+    }
+
+    return { success: true, data: config };
   } catch (error) {
     return {
       success: false,
-      error: new TechDebtError(
+      error: new TechDebtErrorImpl(
         `Parameter validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
         ErrorCategory.Validation,
         false,
@@ -419,136 +349,155 @@ function validateToolParameters(directory?: string, includeTypes?: string[], sev
   }
 }
 
-// Register the technical debt discovery tool with enhanced error handling
+// Register the technical debt discovery tool with TypeSpec types
 server.tool(
   "list-tech-debt",
   "List possible technical debt areas in the project source code.",
   {
     directory: z.string().optional().describe("Project directory to scan. Defaults to current working directory."),
-    includeTypes: z.array(z.string()).optional().describe("Types of debt to include (comments, typing, debugging, etc.)"),
+    includeTypes: z.array(z.enum(["comments", "typing", "debugging", "modernization", "deprecation", "complexity", "size"])).optional().describe("Types of debt to include"),
     severity: z.enum(["low", "medium", "high"]).optional().describe("Minimum severity level to report"),
   },
-  async ({ directory, includeTypes, severity }) => {
+  async (params): Promise<ListTechDebtResponse> => {
     try {
-      // Validate parameters
-      const validationResult = validateToolParameters(directory, includeTypes, severity);
+      // Validate parameters using TypeSpec types
+      const validationResult = validateToolParameters(params);
       if (!validationResult.success) {
         return {
-          isError: true,
-          content: [{
-            type: "text",
-            text: `❌ Validation Error: ${validationResult.error.message}`
-          }]
+          success: false,
+          error: validationResult.error,
+          formattedReport: `❌ Validation Error: ${validationResult.error.message}`
         };
       }
 
-      const { rootDir, minSeverity } = validationResult.data;
-      const severityFilter = { low: 2, medium: 1, high: 0 };
+      const config = validationResult.data;
       
       // Get source files
-      const filesResult = getAllSourceFiles(rootDir);
+      const filesResult = getAllSourceFiles(config);
       if (!filesResult.success) {
         return {
-          isError: true,
-          content: [{
-            type: "text",
-            text: `❌ File System Error: ${filesResult.error.message}`
-          }]
+          success: false,
+          error: filesResult.error,
+          formattedReport: `❌ File System Error: ${filesResult.error.message}`
         };
       }
 
-      const { files, errors } = filesResult.data;
-      if (errors.length > 0) {
-        console.error(`⚠️ Recoverable errors encountered during file collection: ${errors.length}`);
-      }
-      if (files.length === 0) {
-        return {
-          content: [{
-            type: "text",
-            text: "📂 No source files found in the specified directory."
-          }]
-        };
-      }
+      const { files, errors: fsErrors } = filesResult.data;
+      const analysisErrors: TechDebtError[] = [...fsErrors];
+      const fileAnalyses: FileAnalysis[] = [];
 
-      const reports: string[] = [];
-      let totalFindings = 0;
-      const analysisErrors: TechDebtError[] = [];
-
-      // Analyze each file with error recovery
+      // Analyze each file
       for (const file of files) {
-        const analysisResult = analyzeFileForTechDebt(file);
+        const analysisResult = analyzeFileForTechDebt(file, config);
         
         if (!analysisResult.success) {
-          // Log recoverable analysis errors but continue
           if (analysisResult.error.recoverable) {
-            console.error(`⚠️ Skipping file ${file}: ${analysisResult.error.message}`);
             analysisErrors.push(analysisResult.error);
             continue;
           } else {
-            // Fatal analysis error
             return {
-              isError: true,
-              content: [{
-                type: "text",
-                text: `❌ Fatal Analysis Error: ${analysisResult.error.message}`
-              }]
+              success: false,
+              error: analysisResult.error,
+              formattedReport: `❌ Fatal Analysis Error: ${analysisResult.error.message}`
             };
           }
         }
 
-        const findings = analysisResult.data;
+        const fileAnalysis = analysisResult.data;
         
-        // Filter by severity and type if specified
-        const filteredFindings = findings.filter(finding => {
-          const severityMatch = severityFilter[finding.severity] >= severityFilter[minSeverity];
-          const typeMatch = !includeTypes || includeTypes.includes(finding.type);
-          return severityMatch && typeMatch;
-        });
+        // Filter findings by severity
+        const severityOrder = { [Severity.Low]: 2, [Severity.Medium]: 1, [Severity.High]: 0 };
+        const minSeverityOrder = severityOrder[config.minSeverity];
+        
+        fileAnalysis.findings = fileAnalysis.findings.filter(
+          finding => severityOrder[finding.severity] <= minSeverityOrder
+        );
 
-        if (filteredFindings.length > 0) {
-          reports.push(formatFindings(filteredFindings, file));
-          totalFindings += filteredFindings.length;
+        if (fileAnalysis.findings.length > 0) {
+          fileAnalyses.push(fileAnalysis);
         }
       }
 
-      // Prepare report with error summary if needed
-      let errorSummary = '';
-      if (analysisErrors.length > 0) {
-        errorSummary = `\n⚠️ **Warnings**: ${analysisErrors.length} files could not be analyzed due to errors.\n`;
-      }
+      // Generate summary
+      const summary: AnalysisSummary = {
+        totalFiles: files.length,
+        filesWithFindings: fileAnalyses.length,
+        totalFindings: fileAnalyses.reduce((sum, fa) => sum + fa.findings.length, 0),
+        findingsBySeverity: {
+          high: fileAnalyses.reduce((sum, fa) => sum + fa.findings.filter(f => f.severity === Severity.High).length, 0),
+          medium: fileAnalyses.reduce((sum, fa) => sum + fa.findings.filter(f => f.severity === Severity.Medium).length, 0),
+          low: fileAnalyses.reduce((sum, fa) => sum + fa.findings.filter(f => f.severity === Severity.Low).length, 0)
+        },
+        findingsByType: Object.values(DebtType).reduce((acc, type) => {
+          acc[type] = fileAnalyses.reduce((sum, fa) => sum + fa.findings.filter(f => f.type === type).length, 0);
+          return acc;
+        }, {} as Record<string, number>),
+        errorCount: analysisErrors.length
+      };
 
-      if (reports.length === 0) {
-        return {
-          content: [{
-            type: "text",
-            text: `✅ No technical debt found matching the specified criteria.\n\n📊 Scanned ${files.length} files.${errorSummary}`
-          }]
-        };
-      }
+      const report: TechDebtReport = {
+        summary,
+        fileAnalyses,
+        errors: analysisErrors,
+        configuration: config,
+        generatedAt: new Date()
+      };
 
-      const summary = `🔍 **Technical Debt Report**\n📊 Found ${totalFindings} issues in ${reports.length} files (scanned ${files.length} total)${errorSummary}\n\n`;
-      const fullReport = summary + reports.join('\n\n');
+      // Format report for display
+      const formattedReport = formatTechDebtReport(report);
 
       return {
-        content: [{
-          type: "text",
-          text: fullReport
-        }]
+        success: true,
+        report,
+        formattedReport
       };
 
     } catch (error) {
-      // Unexpected error - should not happen with proper Result handling
-      console.error('💥 Unexpected error in tool execution:', error);
+      const techDebtError = new TechDebtErrorImpl(
+        `Unexpected error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
+        ErrorCategory.Configuration,
+        false,
+        { originalError: error }
+      );
+
       return {
-        isError: true,
-        content: [{
-          type: "text",
-          text: `❌ Unexpected Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`
-        }]
+        success: false,
+        error: techDebtError,
+        formattedReport: `❌ ${techDebtError.message}`
       };
     }
   }
 );
+
+/**
+ * Formats technical debt report using TypeSpec types
+ */
+function formatTechDebtReport(report: TechDebtReport): string {
+  const { summary, fileAnalyses } = report;
+  
+  if (summary.totalFindings === 0) {
+    return `✅ No technical debt found matching the specified criteria.\n\n📊 Scanned ${summary.totalFiles} files.`;
+  }
+
+  const summaryText = `🔍 **Technical Debt Report**\n📊 Found ${summary.totalFindings} issues in ${summary.filesWithFindings} files (scanned ${summary.totalFiles} total)\n\n`;
+  
+  const fileReports = fileAnalyses.map(fileAnalysis => {
+    const sortedFindings = fileAnalysis.findings.sort((a, b) => {
+      const severityOrder = { [Severity.High]: 0, [Severity.Medium]: 1, [Severity.Low]: 2 };
+      return severityOrder[a.severity] - severityOrder[b.severity];
+    });
+    
+    const header = `📁 **${fileAnalysis.filePath}**`;
+    const findingsText = sortedFindings.map(finding => {
+      const icon = finding.severity === Severity.High ? '🔴' : finding.severity === Severity.Medium ? '🟡' : '🔵';
+      return `  ${icon} [${finding.type}] ${finding.description}`;
+    }).join('\n');
+    
+    return `${header}\n${findingsText}`;
+  }).join('\n\n');
+
+  return summaryText + fileReports;
+}
 
 /**
  * Main server initialization and startup with enhanced error handling
@@ -559,7 +508,7 @@ async function main(): Promise<void> {
     await server.connect(transport);
     console.error("🚀 Tech Debt Discover Agent MCP Server running on stdio");
   } catch (error) {
-    const techDebtError = new TechDebtError(
+    const techDebtError = new TechDebtErrorImpl(
       `Failed to start MCP server: ${error instanceof Error ? error.message : 'Unknown error'}`,
       ErrorCategory.Configuration,
       false,
