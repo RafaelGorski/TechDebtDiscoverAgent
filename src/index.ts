@@ -75,7 +75,7 @@ function safeReadFile(filePath: string): Result<string> {
     const content = fs.readFileSync(filePath, "utf8");
     return { success: true, data: content };
   } catch (error) {
-    const category = error instanceof Error && error.message.includes('ENOENT') 
+    const category = error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT' 
       ? ErrorCategory.FileSystem 
       : ErrorCategory.Permission;
     
@@ -99,7 +99,7 @@ function safeReadDirectory(dir: string): Result<fs.Dirent[]> {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     return { success: true, data: entries };
   } catch (error) {
-    const category = error instanceof Error && error.message.includes('ENOENT')
+    const category = error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT'
       ? ErrorCategory.FileSystem
       : ErrorCategory.Permission;
     
@@ -121,7 +121,7 @@ function safeReadDirectory(dir: string): Result<fs.Dirent[]> {
  * @param exts File extensions to include
  * @returns Result containing array of file paths or error
  */
-function getAllSourceFiles(dir: string, exts: string[] = DEFAULT_EXTENSIONS): Result<string[]> {
+function getAllSourceFiles(dir: string, exts: string[] = DEFAULT_EXTENSIONS): Result<{ files: string[], errors: TechDebtError[] }> {
   const results: string[] = [];
   const errors: TechDebtError[] = [];
   
@@ -163,7 +163,7 @@ function getAllSourceFiles(dir: string, exts: string[] = DEFAULT_EXTENSIONS): Re
     collectFiles(dir);
     
     // Return success even if there were recoverable errors
-    return { success: true, data: results };
+    return { success: true, data: { files: results, errors } };
   } catch (error) {
     return {
       success: false,
@@ -457,7 +457,10 @@ server.tool(
         };
       }
 
-      const files = filesResult.data;
+      const { files, errors } = filesResult.data;
+      if (errors.length > 0) {
+        console.error(`⚠️ Recoverable errors encountered during file collection: ${errors.length}`);
+      }
       if (files.length === 0) {
         return {
           content: [{
