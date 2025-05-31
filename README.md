@@ -11,6 +11,17 @@ An advanced Model Context Protocol (MCP) server for automated technical debt ana
 - **🚀 Performance Optimized**: Efficiently skips irrelevant directories (node_modules, .git, etc.)
 - **📁 Multi-Language Support**: Supports .js, .ts, .jsx, .tsx files
 
+## 📋 Features Overview
+
+For a comprehensive list of all features, implementation status, and technical details, see **[FUNCTIONALITY.md](./FUNCTIONALITY.md)**.
+
+### Quick Feature Summary
+- 🔍 **Pattern Detection**: TODO comments, TypeScript `any` usage, console statements, deprecated APIs
+- 📁 **Smart Scanning**: Recursive directory traversal with intelligent filtering
+- 🎯 **Severity Levels**: High/Medium/Low categorization with visual indicators
+- ⚙️ **Configurable**: Filter by type, severity, and target directory
+- 🔌 **MCP Integration**: Ready for LLM integration via Model Context Protocol
+
 ## 🔧 Technical Debt Patterns Detected
 
 | Pattern | Severity | Description |
